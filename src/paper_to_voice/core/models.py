@@ -4,6 +4,7 @@ Data models for the Paper to Voice Assistant
 
 import operator
 from typing import Annotated, TypedDict
+
 from langchain_core.pydantic_v1 import BaseModel
 
 
@@ -12,7 +13,7 @@ class State(TypedDict):
     steps: Annotated[list, operator.add]
     substeps: Annotated[list, operator.add]
     solutions: Annotated[list, operator.add]
-    
+
     content: str
     plan: str
     Dialog: Annotated[list, operator.add]

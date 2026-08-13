@@ -61,13 +61,15 @@ def generate_dialog(state: dict) -> dict:
     Generate podcast dialog from research content
     """
     llm = get_llm()
-    text = state['text']
-    tone = state['tone']
-    length = state['length']
-    language = state['language']
+    text = state["text"]
+    tone = state["tone"]
+    length = state["length"]
+    language = state["language"]
 
     modified_system_prompt = SYSTEM_PROMPT
-    modified_system_prompt += f"\n\PLEASE paraphrase the following TEXT in dialog format."
+    modified_system_prompt += (
+        f"\n\PLEASE paraphrase the following TEXT in dialog format."
+    )
 
     if tone:
         modified_system_prompt += f"\n\nTONE: The tone of the podcast should be {tone}."
@@ -82,7 +84,11 @@ def generate_dialog(state: dict) -> dict:
             f"\n\nOUTPUT LANGUAGE <IMPORTANT>: The the podcast should be {language}."
         )
 
-    messages = modified_system_prompt + '\nTEXT: ' + text
+    messages = modified_system_prompt + "\nTEXT: " + text
     response = llm.invoke([messages])
     print(response)
-    return {"Step": [state['step']], "Finding": [state['text']], 'Dialog': [response.content]}
+    return {
+        "Step": [state["step"]],
+        "Finding": [state["text"]],
+        "Dialog": [response.content],
+    }

@@ -3,24 +3,25 @@ Audio processing and consolidation functionality
 """
 
 import os
-import streamlit as st
-from time import sleep
-from tqdm import tqdm
 from tempfile import NamedTemporaryFile
+from time import sleep
+
+import streamlit as st
 from pydub import AudioSegment
 from pydub.generators import Sine
+from tqdm import tqdm
 
+from ..core.config import AMBIENT_GUITAR_FREQ, GUITAR_DURATION, LIGHT_GUITAR_FREQ
 from .tts import generate_podcast_audio
-from ..core.config import LIGHT_GUITAR_FREQ, AMBIENT_GUITAR_FREQ, GUITAR_DURATION
 
 
 def store_voice(topic_dialog: dict) -> list[str]:
     """
     Generate voice files for all dialog parts
-    
+
     Args:
         topic_dialog: Dictionary containing dialog content
-        
+
     Returns:
         List of audio file paths
     """
@@ -51,16 +52,16 @@ def store_voice(topic_dialog: dict) -> list[str]:
 def consolidate_voice(audio_paths: list[str], voice_dir: str) -> str:
     """
     Consolidate multiple audio files into a single podcast file
-    
+
     Args:
         audio_paths: List of audio file paths
         voice_dir: Directory to store voice files
-        
+
     Returns:
         Path to the consolidated audio file
     """
     audio_segments = []
-    voice_path = [paths for paths in audio_paths if paths != 'Empty Text']
+    voice_path = [paths for paths in audio_paths if paths != "Empty Text"]
 
     # Create guitar audio paths
     light_guitar_path = os.path.join(voice_dir, "light-guitar.wav")
@@ -71,7 +72,7 @@ def consolidate_voice(audio_paths: list[str], voice_dir: str) -> str:
         Sine(LIGHT_GUITAR_FREQ).to_audio_segment(duration=GUITAR_DURATION).export(
             light_guitar_path, format="wav"
         )
-    
+
     if not os.path.exists(ambient_guitar_path):
         Sine(AMBIENT_GUITAR_FREQ).to_audio_segment(duration=GUITAR_DURATION).export(
             ambient_guitar_path, format="wav"
@@ -79,7 +80,7 @@ def consolidate_voice(audio_paths: list[str], voice_dir: str) -> str:
 
     # Add background guitar tracks
     audio_segments.append(AudioSegment.from_file(light_guitar_path))
-    
+
     # Add voice tracks
     for audio_file_path in voice_path:
         try:
@@ -95,11 +96,11 @@ def consolidate_voice(audio_paths: list[str], voice_dir: str) -> str:
     if audio_segments:
         combined_audio = sum(audio_segments)
         os.makedirs(os.path.join(voice_dir, "tmp"), exist_ok=True)
-        
-        with NamedTemporaryFile(dir=os.path.join(voice_dir, "tmp"), 
-                                 delete=False, 
-                                 suffix=".mp3") as temp_file:
+
+        with NamedTemporaryFile(
+            dir=os.path.join(voice_dir, "tmp"), delete=False, suffix=".mp3"
+        ) as temp_file:
             combined_audio.export(temp_file.name, format="mp3")
             return temp_file.name
-    
+
     return None

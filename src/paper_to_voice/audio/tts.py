@@ -3,20 +3,24 @@ Text-to-Speech functionality using MeloTTS
 """
 
 import time
+
 from gradio_client import Client
+
 from ..core.config import TTS_MODEL
 
 
-def get_text_to_voice(text: str, speed: float = 0.9, accent: str = "EN-US", language: str = "EN") -> str:
+def get_text_to_voice(
+    text: str, speed: float = 0.9, accent: str = "EN-US", language: str = "EN"
+) -> str:
     """
     Convert text to speech using MeloTTS
-    
+
     Args:
         text: Text to convert to speech
         speed: Speaking speed (default: 0.9)
         accent: Voice accent (default: "EN-US")
         language: Language code (default: "EN")
-        
+
     Returns:
         Path to the generated audio file
     """
@@ -34,16 +38,16 @@ def get_text_to_voice(text: str, speed: float = 0.9, accent: str = "EN-US", lang
 def generate_podcast_audio(text: str, language: str) -> str:
     """
     Generate podcast audio with appropriate voice settings for different speakers
-    
+
     Args:
         text: Text to convert to speech
         language: Language code
-        
+
     Returns:
         Path to generated audio file or 'Empty Text' if no valid text
     """
     if "**Jane:**" in text:
-        text = text.replace("**Jane:**", '').strip()
+        text = text.replace("**Jane:**", "").strip()
         accent = "EN-US"
         speed = 0.9
     elif "**Dr. Sharma:**" in text:
@@ -51,8 +55,8 @@ def generate_podcast_audio(text: str, language: str) -> str:
         accent = "EN_INDIA"
         speed = 0.9
     else:
-        return 'Empty Text'
-    
+        return "Empty Text"
+
     # Retry logic for TTS generation
     for attempt in range(3):
         try:

@@ -1,68 +1,72 @@
-import streamlit as st
-import os
 import base64
 import json
-import time
-import sys
 import operator
-from typing import Annotated, TypedDict
+import os
+import sys
+import time
 from pathlib import Path
-import pypdfium2 as pdfium
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.graph import StateGraph, START, END, MessagesState
-from langgraph.graph.message import add_messages
-from langgraph.constants import Send
-from langchain_core.messages import HumanMessage
+from tempfile import NamedTemporaryFile
 from time import sleep
+from typing import Annotated, TypedDict
+
 import google.generativeai as genai
+import pypdfium2 as pdfium
+import streamlit as st
+from dotenv import load_dotenv
 from gradio_client import Client
+from langchain_core.messages import HumanMessage
+from langchain_core.pydantic_v1 import BaseModel
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.constants import Send
+from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.graph.message import add_messages
 from pydub import AudioSegment
 from pydub.generators import Sine
-from langchain_core.pydantic_v1 import BaseModel
 from tqdm import tqdm
-from tempfile import NamedTemporaryFile
-from dotenv import load_dotenv
 
 load_dotenv()
 
 # Set up Google API Key (consider using st.secrets in production)
-os.environ['GOOGLE_API_KEY'] = os.getenv('GOOGLE_API_KEY')
-genai.configure(api_key=os.environ['GOOGLE_API_KEY'])
+os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
+genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
 
-llm= ChatGoogleGenerativeAI(
-    model=os.getenv('GOOGLE_MODEL_NAME'),
-    temperature=0,
-    max_tokens=None,
-    max_retries=2
+llm = ChatGoogleGenerativeAI(
+    model=os.getenv("GOOGLE_MODEL_NAME"), temperature=0, max_tokens=None, max_retries=2
 )
+
 
 class State(TypedDict):
     image_path: str
-    steps: Annotated[list,operator.add]
-    substeps:Annotated[list,operator.add]
-    solutions:Annotated[list,operator.add]
-    
-    content:str
-    plan: str
-    Dialog:Annotated[list,operator.add]
-    
-class Task(BaseModel):
-    task:str
+    steps: Annotated[list, operator.add]
+    substeps: Annotated[list, operator.add]
+    solutions: Annotated[list, operator.add]
 
-#storing each sub-step
+    content: str
+    plan: str
+    Dialog: Annotated[list, operator.add]
+
+
+class Task(BaseModel):
+    task: str
+
+
+# storing each sub-step
 class SubStep(BaseModel):
     substep: str
-    
+
+
 class StepState(TypedDict):
     step: str
     image_path: str
     solutions: str
     Dialog: str
-    
+
+
 # Utility Functions (copied from the original script)
 def encode_image_to_base64(file_path):
     with open(file_path, "rb") as img_file:
         return f"data:image/jpeg;base64,{base64.b64encode(img_file.read()).decode()}"
+
 
 def process_pdf(pdf_path):
     image_filenames = []
@@ -87,6 +91,7 @@ def process_pdf(pdf_path):
 
     return image_filenames
 
+
 def get_text_to_voice(text, speed=0.9, accent="EN-US", language="EN"):
     hf_client = Client("neuromod0/MeloTTS-English-v3")
     file_path = hf_client.predict(
@@ -97,25 +102,29 @@ def get_text_to_voice(text, speed=0.9, accent="EN-US", language="EN"):
         api_name="/synthesize",
     )
     return file_path
-    
-            
+
+
 def generate_steps(state: State):
-    prompt="""
+    prompt = """
     Consider you are a research scientist in artificial intelligence who is expert in understanding research papers.
     You will be given a research paper and you need to identify all the steps a researcher need to perform.
     Identify each steps and their substeps.
     """
-    message = HumanMessage(content=[{'type':'text','text':prompt},
-                                    *[{"type":'image_url','image_url':img} for img in state['image_path']] # '*' is used to unpack list comprehension into individual elements
-                                    ]
-
-                                    )
+    message = HumanMessage(
+        content=[
+            {"type": "text", "text": prompt},
+            *[
+                {"type": "image_url", "image_url": img} for img in state["image_path"]
+            ],  # '*' is used to unpack list comprehension into individual elements
+        ]
+    )
     response = llm.invoke([message])
     print(response)
-    return {"content": [response.content],"image_path":state['image_path']}
+    return {"content": [response.content], "image_path": state["image_path"]}
+
 
 def markdown_to_json(state: State):
-    prompt ="""
+    prompt = """
     You are given a markdown content and you need to parse this data into json format. Follow correctly key and value
     pairs for each bullet point.
     Follow following schema strictly.
@@ -147,44 +156,54 @@ def markdown_to_json(state: State):
 
     Content:
     %s
-    """% state['content']
+    """ % state["content"]
     str_response = llm.invoke([prompt])
-   
 
-    return({'content':str_response.content,"image_path":state['image_path']})
+    return {"content": str_response.content, "image_path": state["image_path"]}
 
-#parse JSON data embedded within markdown content. 
+
+# parse JSON data embedded within markdown content.
 import json
+
 
 def parse_json(state: State):
     try:
-        text=state['content'] #Extracts markdown content
+        text = state["content"]  # Extracts markdown content
         lines = text.splitlines()
-        json_lines = [line for line in lines if not line.strip().startswith("```") and not line.strip().startswith("'''")] #Filters out content not in JSON
-        json_content = "\n".join(json_lines).strip() #Joins the string back to a single string and removes any whitespace
-        json_data = json.loads(json_content) #Parse json string into content
+        json_lines = [
+            line
+            for line in lines
+            if not line.strip().startswith("```") and not line.strip().startswith("'''")
+        ]  # Filters out content not in JSON
+        json_content = "\n".join(
+            json_lines
+        ).strip()  # Joins the string back to a single string and removes any whitespace
+        json_data = json.loads(json_content)  # Parse json string into content
         output = []
 
         for step in json_data:
             substeps = []
-            for substep in step['substeps']:
-                substeps.append(substep['value'])  # Extract the value directly
+            for substep in step["substeps"]:
+                substeps.append(substep["value"])  # Extract the value directly
 
-            output.append({'step': step['step'], 'substeps': substeps})
+            output.append({"step": step["step"], "substeps": substeps})
         print(json_content)
         return {"plan": output}
     except json.JSONDecodeError as e:
         print(f"Error parsing JSON: {e}")
         # Handle the error, e.g., log it, retry the parsing, or return a default value
         return {"plan": []}
-    
+
+
 def solve_substeps(state: StepState):
     print(state)
-    inp = state['step'] #Extracts the step information from state object
-    print('solving sub steps')
-    #iterates over each substeps and create question answering pair
-    qanda = ' '.join([f'\n Question: {substep} \n Answer:' for substep  in inp['substeps']])
-    prompt=f""" You will be given instruction to analyze research papers. You need to understand the
+    inp = state["step"]  # Extracts the step information from state object
+    print("solving sub steps")
+    # iterates over each substeps and create question answering pair
+    qanda = " ".join(
+        [f"\n Question: {substep} \n Answer:" for substep in inp["substeps"]]
+    )
+    prompt = f""" You will be given instruction to analyze research papers. You need to understand the
     instruction and solve all the questions mentioned in the list.
     Keep the pair of Question and its answer in your response. Your response should be next to the keyword "Answer"
 
@@ -193,17 +212,24 @@ def solve_substeps(state: StepState):
     Questions:
     {qanda}
     """
-    message = HumanMessage(content=[{'type':'text','text':prompt},
-                                    *[{"type":'image_url','image_url':img} for img in state['image_path']]
-                                    ]
-                                    )
+    message = HumanMessage(
+        content=[
+            {"type": "text", "text": prompt},
+            *[{"type": "image_url", "image_url": img} for img in state["image_path"]],
+        ]
+    )
     response = llm.invoke([message])
-    return {"steps":[inp['step']], 'solutions':[response.content]}
+    return {"steps": [inp["step"]], "solutions": [response.content]}
 
-#Managing the larger text in more managable pieces of text
+
+# Managing the larger text in more managable pieces of text
 def continue_to_substeps(state: State):
-    steps = state['plan']# extracts list of text from state obj
-    return [Send("solve_substeps", {"step": s,'image_path':state['image_path']}) for s in steps] 
+    steps = state["plan"]  # extracts list of text from state obj
+    return [
+        Send("solve_substeps", {"step": s, "image_path": state["image_path"]})
+        for s in steps
+    ]
+
 
 SYSTEM_PROMPT = """
 You are a world-class podcast producer tasked with transforming the provided input text into an engaging and informative podcast script. The input may be unstructured or messy, sourced from PDFs or web pages. Your goal is to extract the most interesting and insightful content for a compelling podcast discussion.
@@ -255,14 +281,18 @@ You are a world-class podcast producer tasked with transforming the provided inp
    - Include brief "breather" moments for listeners to absorb complex information
    - End on a high note, perhaps with a thought-provoking question or a call-to-action for listeners
 """
+
+
 def generate_dialog(state):
-    text = state['text']
-    tone = state['tone']
-    length = state['length']
-    language = state['language']
+    text = state["text"]
+    tone = state["tone"]
+    length = state["length"]
+    language = state["language"]
 
     modified_system_prompt = SYSTEM_PROMPT
-    modified_system_prompt += f"\n\PLEASE paraphrase the following TEXT in dialog format."
+    modified_system_prompt += (
+        f"\n\PLEASE paraphrase the following TEXT in dialog format."
+    )
 
     if tone:
         modified_system_prompt += f"\n\nTONE: The tone of the podcast should be {tone}."
@@ -277,30 +307,42 @@ def generate_dialog(state):
             f"\n\nOUTPUT LANGUAGE <IMPORTANT>: The the podcast should be {language}."
         )
 
-    messages = modified_system_prompt + '\nTEXT: '+ text
-    
+    messages = modified_system_prompt + "\nTEXT: " + text
 
     response = llm.invoke([messages])
     print(response)
-    return {"Step":[state['step']],"Finding":[state['text']], 'Dialog':[response.content]}
+    return {
+        "Step": [state["step"]],
+        "Finding": [state["text"]],
+        "Dialog": [response.content],
+    }
 
 
 def continue_to_substeps_voice(state: State):
-    print('voice substeps')
+    print("voice substeps")
 
-    solutions = state['solutions']
-    steps = state['steps']
+    solutions = state["solutions"]
+    steps = state["steps"]
 
-    tone ='Formal' #  ["Fun", "Formal"]
-    return [Send("generate_dialog", {"step":st,"text": s,'tone':tone,'length':"Short (1-2 min)",'language':"EN"}) for st,s in zip(steps,solutions)]
+    tone = "Formal"  #  ["Fun", "Formal"]
+    return [
+        Send(
+            "generate_dialog",
+            {
+                "step": st,
+                "text": s,
+                "tone": tone,
+                "length": "Short (1-2 min)",
+                "language": "EN",
+            },
+        )
+        for st, s in zip(steps, solutions)
+    ]
 
 
 def create_podcast_workflow():
     llm = ChatGoogleGenerativeAI(
-        model='gemini-1.5-flash',
-        temperature=0,
-        max_tokens=None,
-        max_retries=2
+        model="gemini-1.5-flash", temperature=0, max_tokens=None, max_retries=2
     )
 
     graph = StateGraph(State)
@@ -314,16 +356,19 @@ def create_podcast_workflow():
     graph.add_edge("generate_steps", "markdown_to_json")
     graph.add_edge("markdown_to_json", "parse_json")
     graph.add_conditional_edges("parse_json", continue_to_substeps, ["solve_substeps"])
-    graph.add_conditional_edges("solve_substeps", continue_to_substeps_voice, ["generate_dialog"])
+    graph.add_conditional_edges(
+        "solve_substeps", continue_to_substeps_voice, ["generate_dialog"]
+    )
     graph.add_edge("generate_dialog", END)
     app = graph.compile()
 
     return app, llm
 
+
 def generate_podcast_audio(text: str, language: str) -> str:
-    
+
     if "**Jane:**" in text:
-        text = text.replace("**Jane:**",'').strip()
+        text = text.replace("**Jane:**", "").strip()
         accent = "EN-US"
         speed = 0.9
     elif "**Dr. Sharma:**" in text:  # host
@@ -331,16 +376,17 @@ def generate_podcast_audio(text: str, language: str) -> str:
         accent = "EN_INDIA"
         speed = 0.9
     else:
-        return 'Empty Text'
+        return "Empty Text"
     for attempt in range(3):
 
         try:
-            file_path = get_text_to_voice(text,speed,accent,language)
+            file_path = get_text_to_voice(text, speed, accent, language)
             return file_path
         except Exception as e:
             if attempt == 2:  # Last attempt
                 raise  # Re-raise the last exception if all attempts fail
             time.sleep(1)  # Wait for 1 second before retrying
+
 
 def store_voice(topic_dialog):
     audio_path = []
@@ -370,7 +416,7 @@ def store_voice(topic_dialog):
 
 def consolidate_voice(audio_paths, voice_dir):
     audio_segments = []
-    voice_path = [paths for paths in audio_paths if paths != 'Empty Text']
+    voice_path = [paths for paths in audio_paths if paths != "Empty Text"]
 
     # Create guitar audio paths
     light_guitar_path = os.path.join(voice_dir, "light-guitar.wav")
@@ -378,14 +424,18 @@ def consolidate_voice(audio_paths, voice_dir):
 
     # Ensure guitar audio exists
     if not os.path.exists(light_guitar_path):
-        Sine(440).to_audio_segment(duration=1000).export(light_guitar_path, format="wav")
-    
+        Sine(440).to_audio_segment(duration=1000).export(
+            light_guitar_path, format="wav"
+        )
+
     if not os.path.exists(ambient_guitar_path):
-        Sine(220).to_audio_segment(duration=1000).export(ambient_guitar_path, format="wav")
+        Sine(220).to_audio_segment(duration=1000).export(
+            ambient_guitar_path, format="wav"
+        )
 
     # Add background guitar tracks
     audio_segments.append(AudioSegment.from_file(light_guitar_path))
-    
+
     # Add voice tracks
     for audio_file_path in voice_path:
         try:
@@ -401,26 +451,27 @@ def consolidate_voice(audio_paths, voice_dir):
     if audio_segments:
         combined_audio = sum(audio_segments)
         os.makedirs(os.path.join(voice_dir, "tmp"), exist_ok=True)
-        
-        with NamedTemporaryFile(dir=os.path.join(voice_dir, "tmp"), 
-                                 delete=False, 
-                                 suffix=".mp3") as temp_file:
+
+        with NamedTemporaryFile(
+            dir=os.path.join(voice_dir, "tmp"), delete=False, suffix=".mp3"
+        ) as temp_file:
             combined_audio.export(temp_file.name, format="mp3")
             return temp_file.name
-    
+
     return None
+
 
 def main():
     st.title("📄 Research Paper Podcast Generator 🎙️")
-    
+
     # Sidebar for configuration
     st.sidebar.header("Configuration")
     tone = st.sidebar.selectbox("Podcast Tone", ["Formal", "Conversational"])
     language = st.sidebar.selectbox("Language", ["EN"])
 
     # PDF Upload
-    uploaded_pdf = st.file_uploader("Upload Research Paper (PDF)", type=['pdf'])
-    
+    uploaded_pdf = st.file_uploader("Upload Research Paper (PDF)", type=["pdf"])
+
     if uploaded_pdf is not None:
         # Progress tracking
         progress_bar = st.progress(0)
@@ -436,9 +487,12 @@ def main():
             status_text.text("Processing PDF pages...")
             progress_bar.progress(10)
             image_paths = process_pdf(pdf_path)
-            
+
             # Encode images
-            encoded_images = [encode_image_to_base64(f"temp/Photo_{i:03d}.jpg") for i in range(len(image_paths))]
+            encoded_images = [
+                encode_image_to_base64(f"temp/Photo_{i:03d}.jpg")
+                for i in range(len(image_paths))
+            ]
 
             # Create workflow
             status_text.text("Generating podcast workflow...")
@@ -448,19 +502,19 @@ def main():
             # Run workflow
             status_text.text("Analyzing research paper...")
             progress_bar.progress(50)
-            output = list(workflow_app.stream({'image_path': encoded_images}))
+            output = list(workflow_app.stream({"image_path": encoded_images}))
 
             # Extract dialog
             status_text.text("Generating podcast dialog...")
             progress_bar.progress(70)
             topics = []
             dialog_planner = {}
-            
+
             for responses in output[10:17]:
-                dialog = responses['generate_dialog']['Dialog'][0]
-                dialog = dialog.strip().split('## Podcast Script')[-1].strip()
-                dialog = dialog.replace('[Guest name]', 'Dr. Sharma')
-                dialog = dialog.replace('**Guest:**', '**Dr. Sharma**')
+                dialog = responses["generate_dialog"]["Dialog"][0]
+                dialog = dialog.strip().split("## Podcast Script")[-1].strip()
+                dialog = dialog.replace("[Guest name]", "Dr. Sharma")
+                dialog = dialog.replace("**Guest:**", "**Dr. Sharma**")
                 dialog_planner[len(dialog_planner)] = dialog
             print(dialog)
             print(dialog_planner)
@@ -468,7 +522,7 @@ def main():
             # Generate audio
             status_text.text("Synthesizing podcast audio...")
             progress_bar.progress(90)
-            
+
             # Temporary directory for voice generation
             voice_dir = os.path.join("temp", "voices")
             os.makedirs(voice_dir, exist_ok=True)
@@ -478,11 +532,11 @@ def main():
             # Generate voice for each dialog part
             audio_paths = []
             for _, dialog in dialog_planner.items():
-                dialog_parts = dialog.split('\n')
+                dialog_parts = dialog.split("\n")
                 for part in dialog_parts:
                     if len(part.strip()) > 0:
                         try:
-                            audio_file = generate_podcast_audio(part.strip(),language)
+                            audio_file = generate_podcast_audio(part.strip(), language)
                             audio_paths.append(audio_file)
                         except Exception as e:
                             st.warning(f"Could not generate voice for part: {e}")
@@ -498,15 +552,16 @@ def main():
 
             # Play audio
             if final_audio_path:
-                #with open(final_audio_path, 'rb') as audio_file:
+                # with open(final_audio_path, 'rb') as audio_file:
                 st.audio(final_audio_path, format="audio/mpeg")
                 st.success("Podcast generated successfully!")
 
         except Exception as e:
             import traceback
-            
+
             st.error(f"An error occurred: {traceback.format_exc()}")
             st.error("Please check your PDF and try again.")
+
 
 if __name__ == "__main__":
     main()

@@ -2,19 +2,20 @@
 Utility functions for PDF processing and image encoding
 """
 
-import os
 import base64
-import streamlit as st
+import os
+
 import pypdfium2 as pdfium
+import streamlit as st
 
 
 def encode_image_to_base64(file_path: str) -> str:
     """
     Encode an image file to base64 string
-    
+
     Args:
         file_path: Path to the image file
-        
+
     Returns:
         Base64 encoded image string with data URI prefix
     """
@@ -25,10 +26,10 @@ def encode_image_to_base64(file_path: str) -> str:
 def process_pdf(pdf_path: str) -> list[str]:
     """
     Convert PDF pages to individual image files
-    
+
     Args:
         pdf_path: Path to the PDF file
-        
+
     Returns:
         List of image filenames created
     """
