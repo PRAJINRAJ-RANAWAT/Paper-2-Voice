@@ -1,8 +1,12 @@
 """
-Dialog generation for podcast creation
+Dialog generation for podcast creation with retry handling and deterministic ordering.
 """
 
+import logging
 from ..core.config import get_llm
+from ..utils.retry import retry_with_backoff
+
+logger = logging.getLogger("paper_to_voice.workflow.dialog")
 
 SYSTEM_PROMPT = """
 You are a world-class podcast producer tasked with transforming the provided input text into an engaging and informative podcast script. The input may be unstructured or messy, sourced from PDFs or web pages. Your goal is to extract the most interesting and insightful content for a compelling podcast discussion.
@@ -28,11 +32,11 @@ You are a world-class podcast producer tasked with transforming the provided inp
    - A balance of information and entertainment
 
    Rules for the dialogue:
-   - The host (Jane) always initiates the conversation and interviews  Dr. Sharma
+   - The host (Jane) always initiates the conversation and interviews Dr. Sharma
    - Include thoughtful questions from the host to guide the discussion
    - Incorporate natural speech patterns, including occasional verbal fillers (e.g., "um," "well," "you know")
    - Allow for natural interruptions and back-and-forth between host and Dr. Sharma
-   - Ensure  Dr. Sharma's responses are substantiated by the input text, avoiding unsupported claims
+   - Ensure Dr. Sharma's responses are substantiated by the input text, avoiding unsupported claims
    - Maintain a PG-rated conversation appropriate for all audiences
    - Avoid any marketing or self-promotional content from Dr. Sharma
    - The host concludes the conversation
@@ -58,16 +62,17 @@ You are a world-class podcast producer tasked with transforming the provided inp
 
 def generate_dialog(state: dict) -> dict:
     """
-    Generate podcast dialog from research content
+    Generate podcast dialog from research content with exponential backoff retry.
     """
     llm = get_llm()
-    text = state['text']
-    tone = state['tone']
-    length = state['length']
-    language = state['language']
+    text = state.get('text', '')
+    tone = state.get('tone', 'Formal')
+    length = state.get('length', 'Short (1-2 min)')
+    language = state.get('language', 'EN')
+    step_idx = state.get('step_index', 0)
 
     modified_system_prompt = SYSTEM_PROMPT
-    modified_system_prompt += f"\n\PLEASE paraphrase the following TEXT in dialog format."
+    modified_system_prompt += "\n\nPLEASE paraphrase the following TEXT in dialog format."
 
     if tone:
         modified_system_prompt += f"\n\nTONE: The tone of the podcast should be {tone}."
@@ -76,13 +81,28 @@ def generate_dialog(state: dict) -> dict:
             "Short (1-2 min)": "Keep the podcast brief, around 1-2 minutes long.",
             "Medium (3-5 min)": "Aim for a moderate length, about 3-5 minutes.",
         }
-        modified_system_prompt += f"\n\nLENGTH: {length_instructions[length]}"
+        instruction = length_instructions.get(length, "Keep the podcast brief, around 1-2 minutes long.")
+        modified_system_prompt += f"\n\nLENGTH: {instruction}"
     if language:
         modified_system_prompt += (
-            f"\n\nOUTPUT LANGUAGE <IMPORTANT>: The the podcast should be {language}."
+            f"\n\nOUTPUT LANGUAGE <IMPORTANT>: The podcast should be {language}."
         )
 
     messages = modified_system_prompt + '\nTEXT: ' + text
-    response = llm.invoke([messages])
-    print(response)
-    return {"Step": [state['step']], "Finding": [state['text']], 'Dialog': [response.content]}
+
+    def _call():
+        return llm.invoke([messages])
+
+    response = retry_with_backoff(_call, operation_name=f"generate_dialog_step_{step_idx}")
+
+    return {
+        "Step": [state.get('step', '')],
+        "Finding": [text],
+        "Dialog": [response.content],
+        "indexed_dialogs": [{
+            "index": step_idx,
+            "step": state.get('step', ''),
+            "finding": text,
+            "dialog": response.content,
+        }],
+    }

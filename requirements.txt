@@ -9,3 +9,4 @@ pydub
 tqdm
 python-dotenv
 pytest
+pydantic>=2.0.0

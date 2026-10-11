@@ -4,8 +4,15 @@ Utility functions for PDF processing and image encoding
 
 import os
 import base64
-import streamlit as st
+import logging
 import pypdfium2 as pdfium
+
+try:
+    import streamlit as st
+except ImportError:
+    st = None
+
+logger = logging.getLogger("paper_to_voice.utils.pdf_processor")
 
 
 def encode_image_to_base64(file_path: str) -> str:
@@ -50,6 +57,8 @@ def process_pdf(pdf_path: str) -> list[str]:
             image_filenames.append(filename)
 
     except Exception as e:
-        st.error(f"Error processing PDF: {e}")
+        logger.error("Error processing PDF: %s", e)
+        if st is not None:
+            st.error(f"Error processing PDF: {e}")
 
     return image_filenames

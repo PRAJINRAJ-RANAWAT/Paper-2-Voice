@@ -55,24 +55,26 @@ def main():
             progress_bar.progress(30)
             workflow_app, _ = create_podcast_workflow()
 
-            # Run workflow
+            # Run workflow with bounded concurrency
             status_text.text("Analyzing research paper...")
             progress_bar.progress(50)
-            output = list(workflow_app.stream({'image_path': encoded_images}))
+            from src.paper_to_voice.core.config import MAX_CONCURRENCY
+            output = list(workflow_app.stream({'image_path': encoded_images}, config={"max_concurrency": MAX_CONCURRENCY}))
 
             # Extract dialog
             status_text.text("Generating podcast dialog...")
             progress_bar.progress(70)
             dialog_planner = {}
             
-            # Extract dialogs from workflow output
-            for responses in output[10:17]:
-                if 'generate_dialog' in responses:
-                    dialog = responses['generate_dialog']['Dialog'][0]
-                    dialog = dialog.strip().split('## Podcast Script')[-1].strip()
-                    dialog = dialog.replace('[Guest name]', 'Dr. Sharma')
-                    dialog = dialog.replace('**Guest:**', '**Dr. Sharma**')
-                    dialog_planner[len(dialog_planner)] = dialog
+            # Extract all dialogs from workflow output regardless of step count
+            for responses in output:
+                if isinstance(responses, dict) and 'generate_dialog' in responses:
+                    dialog_list = responses['generate_dialog'].get('Dialog', [])
+                    for d in dialog_list:
+                        dialog = str(d).strip().split('## Podcast Script')[-1].strip()
+                        dialog = dialog.replace('[Guest name]', 'Dr. Sharma')
+                        dialog = dialog.replace('**Guest:**', '**Dr. Sharma**')
+                        dialog_planner[len(dialog_planner)] = dialog
             
             print("Dialog planner:", dialog_planner)
 
@@ -84,18 +86,8 @@ def main():
             voice_dir = os.path.join(TEMP_DIR, VOICES_DIR)
             os.makedirs(voice_dir, exist_ok=True)
 
-            # Generate voice for each dialog part
-            audio_paths = []
-            for _, dialog in dialog_planner.items():
-                dialog_parts = dialog.split('\n')
-                for part in dialog_parts:
-                    if len(part.strip()) > 0:
-                        try:
-                            audio_file = generate_podcast_audio(part.strip(), language)
-                            if audio_file != 'Empty Text':
-                                audio_paths.append(audio_file)
-                        except Exception as e:
-                            st.warning(f"Could not generate voice for part: {e}")
+            # Generate voice for all dialog parts using bounded concurrency and retries
+            audio_paths = store_voice(dialog_planner, language=language)
 
             # Consolidate voice tracks
             print("Audio paths:", audio_paths)
