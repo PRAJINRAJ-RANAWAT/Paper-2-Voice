@@ -1,0 +1,73 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: paper2voice_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  celery_worker_1:
+    build: .
+    container_name: paper2voice_worker_1
+    command: celery -A src.paper_to_voice.tasks.celery_app worker -Q research_steps,dialog_tasks -c 2 -l info -n worker1@%h
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GOOGLE_MODEL_NAME=${GOOGLE_MODEL_NAME:-gemini-1.5-flash}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+    volumes:
+      - ./temp:/app/temp
+      - ./voices:/app/voices
+    restart: unless-stopped
+
+  celery_worker_2:
+    build: .
+    container_name: paper2voice_worker_2
+    command: celery -A src.paper_to_voice.tasks.celery_app worker -Q research_steps,dialog_tasks -c 2 -l info -n worker2@%h
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GOOGLE_MODEL_NAME=${GOOGLE_MODEL_NAME:-gemini-1.5-flash}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+    volumes:
+      - ./temp:/app/temp
+      - ./voices:/app/voices
+    restart: unless-stopped
+
+  orchestrator:
+    build: .
+    container_name: paper2voice_orchestrator
+    command: streamlit run main.py --server.port=8501 --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    depends_on:
+      redis:
+        condition: service_healthy
+      celery_worker_1:
+        condition: service_started
+      celery_worker_2:
+        condition: service_started
+    environment:
+      - USE_CELERY=true
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GOOGLE_MODEL_NAME=${GOOGLE_MODEL_NAME:-gemini-1.5-flash}
+      - MAX_CONCURRENCY=${MAX_CONCURRENCY:-4}
+    volumes:
+      - ./temp:/app/temp
+      - ./voices:/app/voices
+    restart: unless-stopped

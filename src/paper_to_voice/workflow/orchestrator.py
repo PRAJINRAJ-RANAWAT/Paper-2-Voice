@@ -5,6 +5,7 @@ bounded concurrency, and deterministic state ordering.
 
 import logging
 from typing import Any, List, Optional, Tuple
+from langgraph.graph import StateGraph, START, END
 try:
     from langgraph.types import Send
 except ImportError:
@@ -34,6 +35,7 @@ def continue_to_substeps(state: State) -> List[Send]:
     if isinstance(image_paths, str):
         image_paths = [image_paths]
 
+    workflow_id = state.get('workflow_id', 'default')
     tasks = []
     for idx, step_item in enumerate(plan):
         tasks.append(
@@ -43,6 +45,7 @@ def continue_to_substeps(state: State) -> List[Send]:
                     "step": step_item,
                     "image_path": image_paths,
                     "step_index": idx,
+                    "workflow_id": workflow_id,
                 },
             )
         )
@@ -62,6 +65,7 @@ def continue_to_substeps_voice(state: State) -> List[Send]:
     steps = state.get('steps', [])
     solutions = state.get('solutions', [])
     plan = state.get('plan', [])
+    workflow_id = state.get('workflow_id', 'default')
 
     pairs: List[Tuple[int, Any, str]] = []
 
@@ -114,6 +118,7 @@ def continue_to_substeps_voice(state: State) -> List[Send]:
                 "length": length,
                 "language": language,
                 "step_index": idx,
+                "workflow_id": workflow_id,
             },
         )
         for idx, step_desc, sol_text in pairs

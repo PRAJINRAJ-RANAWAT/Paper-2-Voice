@@ -297,17 +297,49 @@ $$\text{delay} = \text{random.uniform}(0, \min(\text{max\_delay}, \text{base\_de
 - **Stage 2 (Dialogue Fan-out)**: `continue_to_substeps_voice()` pairs steps and solutions using deterministic indices. Detects step/solution count mismatches and prevents silently dropped results.
 - **Deterministic Aggregation**: Task results are tagged with stable indices and re-sorted to preserve original document order regardless of asynchronous completion order.
 
-### 4. Bounded In-Process Concurrency vs Distributed Execution
-- **In-Process Concurrency**: Task-level parallelism is scheduled within the local Python process using LangGraph task scheduling (`max_concurrency` config) and a bounded `ThreadPoolExecutor` for I/O-bound TTS calls.
-- **Rate Limit Bounding**: The default maximum concurrency (`MAX_CONCURRENCY=4`) prevents rate-limit exhaustion and memory contention.
-- **Note**: This is in-process threading and native graph fan-out on a single machine, not a distributed queue (Celery/RabbitMQ) or multi-machine worker fleet.
+### 4. Distributed Task Processing with Celery & Redis
+When distributed processing is desired (`USE_CELERY=true`), independent tasks in the two fan-out stages execute in separate worker processes via Celery and Redis:
+- **Broker & Backend**: Redis (`redis://redis:6379/0` in Docker or `redis://localhost:6379/0` locally).
+- **Dedicated Task Queues**:
+  - `research_steps`: Consumed by workers for solving research substeps (`solve_substeps_task`).
+  - `dialog_tasks`: Consumed by workers for dialogue script generation (`generate_dialog_task`).
+- **Clean LangGraph Integration**: LangGraph's Send-based fan-out dispatches tasks with stable IDs to the Celery queue and awaits their results with configurable timeouts (`CELERY_TASK_TIMEOUT=120`), ensuring full state consistency before moving to downstream nodes.
+- **Task Lifecycle & Status Tracking**: The `TaskTracker` maintains live status across `PENDING`, `RUNNING`, `SUCCEEDED`, and `FAILED` states.
+- **Idempotency & Redelivery Safety**: Tasks use deterministic IDs (e.g., `workflow_{id}_step_{index}` and `workflow_{id}_dialog_{index}`). If redelivered due to network disconnects or worker crashes (`task_acks_late=True`), the worker returns the cached result without repeating costly LLM calls.
+- **Storage Safety**: Redis is strictly used as a task broker and metadata store. Heavy binary files (PDFs, raw audio chunks) are never stored in Redis.
 
-### 5. Audio Correctness & Verification
+### 5. Running with Docker Compose (Local Multi-Process Cluster)
+The repository includes a complete multi-container Docker Compose configuration featuring Redis, two independent Celery worker processes, and the orchestrator web app:
+
+```bash
+# 1. Provide your Google API key
+export GOOGLE_API_KEY="your-api-key-here"
+
+# 2. Build and start Redis, two Celery workers, and the Streamlit orchestrator
+docker compose up --build
+
+# 3. Access the Streamlit application
+open http://localhost:8501
+```
+
+To run Celery workers manually on a local host:
+```bash
+# Start Redis (if installed locally)
+redis-server
+
+# Run Celery Worker 1
+celery -A src.paper_to_voice.tasks.celery_app worker -Q research_steps,dialog_tasks -c 2 -l info -n worker1@%h
+
+# Run Celery Worker 2
+celery -A src.paper_to_voice.tasks.celery_app worker -Q research_steps,dialog_tasks -c 2 -l info -n worker2@%h
+```
+
+### 6. Audio Correctness & Verification
 - **Speaker Voices**: Preserves designated speaker profiles (`**Jane:**` $\to$ EN-US, `**Dr. Sharma:**` $\to$ EN-India).
 - **Format Verification**: Consolidated audio is normalized and exported to 44,100 Hz stereo (channels=2). The exported MP3 metadata is inspected via `verify_audio_metadata` to guarantee delivery standards.
 - **Safe Cleanup**: Temporary audio chunks are safely managed and cleaned up to prevent orphaned files.
 
-### 6. Running Tests
+### 7. Running Tests
 Run the automated test suite with:
 ```bash
 pytest -v tests/

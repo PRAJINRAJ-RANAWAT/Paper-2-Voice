@@ -27,6 +27,12 @@ BASE_RETRY_DELAY = float(os.getenv('BASE_RETRY_DELAY', '1.0'))
 MAX_RETRY_DELAY = float(os.getenv('MAX_RETRY_DELAY', '30.0'))
 MAX_CONCURRENCY = int(os.getenv('MAX_CONCURRENCY', '4'))
 
+# Distributed Celery configuration
+USE_CELERY = os.getenv('USE_CELERY', 'false').lower() in ('true', '1', 'yes')
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+CELERY_TASK_TIMEOUT = int(os.getenv('CELERY_TASK_TIMEOUT', '120'))
+
 # Audio Configuration
 AUDIO_SAMPLE_RATE = int(os.getenv('AUDIO_SAMPLE_RATE', '44100'))
 AUDIO_CHANNELS = int(os.getenv('AUDIO_CHANNELS', '2'))  # 2 for stereo

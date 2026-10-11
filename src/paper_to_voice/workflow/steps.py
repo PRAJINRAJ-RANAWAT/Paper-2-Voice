@@ -4,6 +4,7 @@ Workflow steps for processing research papers with schema validation and retry h
 
 import json
 import logging
+import os
 import re
 from typing import Any, List, Optional, Tuple, Union
 from langchain_core.messages import HumanMessage
@@ -249,11 +250,12 @@ def parse_json(state: State, llm_for_recovery: Optional[Any] = None) -> dict:
 def solve_substeps(state: StepState) -> dict:
     """
     Solve substeps for an individual research step.
+    Supports both local execution and distributed Celery worker execution when USE_CELERY is enabled.
     Maintains step_index for deterministic aggregation.
     """
-    llm = get_llm()
     inp = state['step']
     step_idx = state.get('step_index', 0)
+    workflow_id = state.get('workflow_id', 'default')
 
     if isinstance(inp, dict):
         step_title = inp.get('step', '')
@@ -262,6 +264,49 @@ def solve_substeps(state: StepState) -> dict:
         step_title = str(inp)
         substeps = []
 
+    image_paths = state.get('image_path', [])
+    if isinstance(image_paths, str):
+        image_paths = [image_paths]
+
+    from ..core.config import CELERY_TASK_TIMEOUT, USE_CELERY
+
+    use_celery = os.getenv("USE_CELERY", "false").lower() in ("true", "1", "yes") or USE_CELERY
+    if use_celery:
+        try:
+            from ..tasks.workers import solve_substeps_task
+            from ..tasks.tracking import TaskStatus, tracker
+
+            stable_task_id = f"workflow_{workflow_id}_step_{step_idx}"
+            tracker.set_task_status(
+                task_id=stable_task_id,
+                status=TaskStatus.PENDING,
+                workflow_id=workflow_id,
+                stage="research_step",
+                step_index=step_idx,
+            )
+
+            async_result = solve_substeps_task.apply_async(
+                kwargs={
+                    "step_data": inp,
+                    "image_paths": image_paths,
+                    "step_index": step_idx,
+                    "workflow_id": workflow_id,
+                },
+                task_id=stable_task_id,
+                queue="research_steps",
+            )
+            result = async_result.get(timeout=CELERY_TASK_TIMEOUT)
+            return {
+                "steps": [result["step"]],
+                "solutions": [result["solution"]],
+                "indexed_solutions": [result],
+            }
+        except Exception as exc:
+            logger.error("Distributed Celery solve_substeps_task failed (step %d): %s", step_idx, exc)
+            raise exc
+
+    # Local in-process execution fallback
+    llm = get_llm()
     qanda = ' '.join([
         f'\n Question: {substep} \n Answer:' 
         for substep in substeps
@@ -276,10 +321,6 @@ def solve_substeps(state: StepState) -> dict:
     Questions:
     {qanda}
     """
-    
-    image_paths = state.get('image_path', [])
-    if isinstance(image_paths, str):
-        image_paths = [image_paths]
 
     message = HumanMessage(content=[
         {'type': 'text', 'text': prompt},

@@ -3,6 +3,7 @@ Dialog generation for podcast creation with retry handling and deterministic ord
 """
 
 import logging
+import os
 from ..core.config import get_llm
 from ..utils.retry import retry_with_backoff
 
@@ -63,14 +64,58 @@ You are a world-class podcast producer tasked with transforming the provided inp
 def generate_dialog(state: dict) -> dict:
     """
     Generate podcast dialog from research content with exponential backoff retry.
+    Supports both local execution and distributed Celery worker execution when USE_CELERY is enabled.
     """
-    llm = get_llm()
     text = state.get('text', '')
     tone = state.get('tone', 'Formal')
     length = state.get('length', 'Short (1-2 min)')
     language = state.get('language', 'EN')
     step_idx = state.get('step_index', 0)
+    workflow_id = state.get('workflow_id', 'default')
 
+    from ..core.config import CELERY_TASK_TIMEOUT, USE_CELERY
+
+    use_celery = os.getenv("USE_CELERY", "false").lower() in ("true", "1", "yes") or USE_CELERY
+    if use_celery:
+        try:
+            from ..tasks.workers import generate_dialog_task
+            from ..tasks.tracking import TaskStatus, tracker
+
+            stable_task_id = f"workflow_{workflow_id}_dialog_{step_idx}"
+            tracker.set_task_status(
+                task_id=stable_task_id,
+                status=TaskStatus.PENDING,
+                workflow_id=workflow_id,
+                stage="dialogue_generation",
+                step_index=step_idx,
+            )
+
+            async_result = generate_dialog_task.apply_async(
+                kwargs={
+                    "step_desc": state.get('step', ''),
+                    "finding_text": text,
+                    "tone": tone,
+                    "length": length,
+                    "language": language,
+                    "step_index": step_idx,
+                    "workflow_id": workflow_id,
+                },
+                task_id=stable_task_id,
+                queue="dialog_tasks",
+            )
+            result = async_result.get(timeout=CELERY_TASK_TIMEOUT)
+            return {
+                "Step": [result["step"]],
+                "Finding": [result["finding"]],
+                "Dialog": [result["dialog"]],
+                "indexed_dialogs": [result],
+            }
+        except Exception as exc:
+            logger.error("Distributed Celery generate_dialog_task failed (step %d): %s", step_idx, exc)
+            raise exc
+
+    # Local in-process execution fallback
+    llm = get_llm()
     modified_system_prompt = SYSTEM_PROMPT
     modified_system_prompt += "\n\nPLEASE paraphrase the following TEXT in dialog format."
 
